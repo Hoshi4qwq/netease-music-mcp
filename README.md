@@ -34,6 +34,7 @@
 
 - 完整的逐行清单：[`docs/改造点清单.md`](docs/改造点清单.md)
 - 改造前后链路对比：[`docs/before-after.md`](docs/before-after.md)
+- **改造前后量化对比**：[`docs/quantitative-comparison.md`](docs/quantitative-comparison.md) —— 同批 10 条用例，上游 4/10（40%）→ 当前 10/10（100%）；复现命令 `python tools/compare_versions.py`
 - **AI 参与声明**：[`docs/ai-disclosure.md`](docs/ai-disclosure.md)
 
 ### 4. 运行步骤
