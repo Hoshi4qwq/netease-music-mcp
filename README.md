@@ -7,9 +7,10 @@
 
 ### 1. 来源
 
+- 本仓库（fork）：[Hoshi4qwq/netease-music-mcp](https://github.com/Hoshi4qwq/netease-music-mcp)
 - 上游项目：[Vael-KY/netease-music-mcp](https://github.com/Vael-KY/netease-music-mcp)
 - 上游基线提交：`7a9344b` *fix: apply 3.2.1 NetEase request and history repairs*
-- 获取方式：`git clone https://github.com/Vael-KY/netease-music-mcp.git`（**注：本仓库是在上游基础上直接 clone 后二次开发，并非 GitHub fork 关系，详见「已知问题」**）
+- 仓库关系：**GitHub fork**，保留了上游全部提交历史（68 次），本组在其上新增 7 次提交
 - 更早的源头：上游基于 [Cheiineeey/netease-music-mcp](https://github.com/Cheiineeey/netease-music-mcp)（Elle & Matt）重写
 
 ### 2. 许可证
@@ -21,7 +22,7 @@
 
 ### 3. 改造说明
 
-相对上游基线累计 **15 个文件，+4511 / −657 行**，共 5 次提交。
+相对上游基线累计 **15 个文件，+4511 / −657 行**，共 7 次提交。
 
 | 方向 | 内容 |
 |---|---|
@@ -38,8 +39,8 @@
 ### 4. 运行步骤
 
 ```bash
-# 1) 克隆本项目
-git clone <本仓库地址>
+# 1) 克隆本项目（本组 fork）
+git clone https://github.com/Hoshi4qwq/netease-music-mcp.git
 cd netease-music-mcp
 
 # 2) 配置 Cookie（必须）
@@ -69,7 +70,7 @@ python -m unittest discover -s tests
 
 | # | 问题 | 影响 | 状态 |
 |---|---|---|---|
-| 1 | **本仓库不是 GitHub fork 关系**，是在上游基础上 `git clone` 后直接开发 | 不满足课程「必须是 fork」的形式要求 | 需在汇报前于 GitHub 创建 fork 并推送，或与教师说明 |
+| 1 | ~~本仓库不是 GitHub fork 关系~~ | — | ✅ **已解决**：已 fork 至 [Hoshi4qwq/netease-music-mcp](https://github.com/Hoshi4qwq/netease-music-mcp) 并推送全部提交 |
 | 2 | 网页控制台与 `docs/` 文档由 **AI 辅助生成** | 若未声明会触发 −3 扣分 | 已在 [`docs/ai-disclosure.md`](docs/ai-disclosure.md) 声明 |
 | 3 | 「AI 用户侧写」的时间窗口只有 **全部 / 本周 / 最近事件** 三档 | 用户期望的「1 年内 / 1 月内」无法实现——网易云接口不提供任意时间段的历史播放记录 | 已在页面内如实说明；`get_recent_plays` 实测仅回溯约 2 天 |
 | 4 | 网页播放器为**跳转式**（新标签页打开 `music.163.com`），非站内内嵌播放 | 需登录网易云网页版才能完整播放；版权曲目仍受官方限制 | 设计取舍：内嵌需外链播放器授权，且多数曲目不可用 |
