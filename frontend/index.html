@@ -1327,28 +1327,67 @@ function aiUrl() {
   return (m ? m[1] : location.origin) + '/analyze';
 }
 
-/** 只发送统计结果，不发送任何账号凭据或原始 Cookie */
+/** 只发送统计结果，不发送任何账号凭据或原始 Cookie。
+ *  每个数据块都标注来源，避免模型把「累计排行」的数字当成「最近事件」的数字。 */
 function statsPayload(a) {
-  const label = RANGES.filter(function (r) { return r.id === a.mode; })[0].label;
-  return {
-    range: label,
-    totals: { songs: a.base.length, plays: a.total, avg_plays_per_song: +a.avg.toFixed(2) },
-    top_artists: a.artists.slice(0, 8).map(function (x) {
-      return { name: x.name, plays: Math.round(x.plays), songs: x.songs };
-    }),
-    top_songs: a.A.slice(0, 10).map(function (x) {
-      return { name: x.name, artist: x.artist, plays: x.plays };
-    }),
-    week_top_songs: a.W.slice(0, 8).map(function (x) {
-      return { name: x.name, artist: x.artist, plays: x.plays };
-    }),
-    hourly_distribution: a.hours,
-    peak_hour: a.peakHour,
-    night_ratio: +a.nightRate.toFixed(3),
-    period: a.period,
-    language: { latin_ratio: +a.latinRate.toFixed(3), cjk_ratio: +a.cjkRate.toFixed(3) },
-    new_entries_count: a.fresh.length,
+  const rng = RANGES.filter(function (r) { return r.id === a.mode; })[0];
+  const num = function (v, d) { return typeof v === 'number' && isFinite(v) ? v : d; };
+  const arr = function (v) { return Array.isArray(v) ? v : []; };
+  const isRecent = a.mode === 'recent';
+  const R = arr(a.R);
+
+  const p = {
+    range: rng ? rng.label : String(a.mode || ''),
+    basis: isRecent
+      ? '本窗口只有带时间戳的播放事件，没有累计播放次数'
+      : (a.mode === 'week' ? '基于最近 7 天收听排行' : '基于累计收听排行，各取前 100 名'),
   };
+
+  if (isRecent) {
+    // 只给本窗口真实拥有的数据，绝不放累计次数
+    p.window_events = {
+      count: R.length,
+      span_days: num(a.spanDays, null),
+      top_artist: a.recentArtist
+        ? { name: a.recentArtist.name, count: num(a.recentArtist.count, 0) } : null,
+    };
+  } else {
+    p.ranking = {
+      songs: arr(a.base).length,
+      plays: num(a.total, 0),
+      avg_plays_per_song: +num(a.avg, 0).toFixed(2),
+      top_artist_share: +num(a.topShare, 0).toFixed(3),
+      top_artists: arr(a.artists).slice(0, 8).map(function (x) {
+        return { name: x.name, plays: Math.round(num(x.plays, 0)), songs: num(x.songs, 0) };
+      }),
+      top_songs: arr(a.A).slice(0, 10).map(function (x) {
+        return { name: x.name, artist: x.artist, plays: num(x.plays, 0) };
+      }),
+    };
+    if (a.mode === 'all') {
+      p.week_ranking = {
+        top_songs: arr(a.W).slice(0, 8).map(function (x) {
+          return { name: x.name, artist: x.artist, plays: num(x.plays, 0) };
+        }),
+      };
+    }
+  }
+
+  // 时段分布三个窗口都来自带时间戳的最近事件，明确标注
+  p.hourly = {
+    distribution: arr(a.hours),
+    peak_hour: num(a.peakHour, null),
+    night_ratio: +num(a.nightRate, 0).toFixed(3),
+    period: a.period || '',
+    source: '来自最近约 2 天的带时间戳播放事件',
+  };
+
+  p.language = {
+    latin_ratio: +num(a.latinRate, 0).toFixed(3),
+    cjk_ratio: +num(a.cjkRate, 0).toFixed(3),
+    note: '按歌名字符粗略估算，不是官方分类',
+  };
+  return p;
 }
 
 /** 点「用 AI 解读」后才把统计数字发给模型服务 */
@@ -1358,11 +1397,23 @@ window.runAi = async function () {
   if (!a || !box) return;
   box.innerHTML = '<div class="ai-loading"><span class="spin"></span>' +
     '正在请求模型解读…（数字已发送，凭据未发送）</div>';
+
+  // 先单独组装 payload：这一层出错是本地 bug，不该报成「连不上服务」
+  let body;
+  try {
+    body = JSON.stringify({ stats: statsPayload(a) });
+  } catch (e) {
+    box.innerHTML = '<div class="ai-err">本地统计数据组装失败：' + esc(e.message) +
+      '<div class="ai-off-hint">这是前端问题，不是网络问题。' +
+      '下方本地规则洞察仍然可用。</div></div>';
+    return;
+  }
+
   try {
     const res = await fetch(aiUrl(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stats: statsPayload(a) }),
+      body: body,
     });
     const d = await res.json();
     if (d.ok) {
@@ -1384,8 +1435,9 @@ window.runAi = async function () {
         '<div class="ai-off-hint">下方本地规则洞察仍然可用。</div></div>';
     }
   } catch (e) {
-    box.innerHTML = '<div class="ai-err">连不上本机服务：' + esc(e.message) +
-      '<div class="ai-off-hint">下方本地规则洞察仍然可用。</div></div>';
+    box.innerHTML = '<div class="ai-err">请求本机服务失败：' + esc(e.message) +
+      '<div class="ai-off-hint">确认服务在本机运行，且页面地址与 MCP 端点同源。' +
+      '下方本地规则洞察仍然可用。</div></div>';
   }
 };
 
