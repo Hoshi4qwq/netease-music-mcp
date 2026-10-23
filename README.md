@@ -144,6 +144,7 @@ python -m unittest discover -s tests
   - 兼容旧客户端的 SSE 传输：`GET /sse` → `endpoint` 事件 → `POST /message?sessionId=...`
   - 新增 **stdio 传输**（`--transport stdio`），本地 MCP 客户端无需端口
 - 🔒 **安全**：默认拒绝来自浏览器的跨域请求（防 DNS rebinding / 恶意网页驱动你的账号），需要时用 `MCP_ALLOW_ORIGINS` 放行；日志与错误信息不再带出 URL 查询串和 Cookie
+- 🤖 **侧写可调用 AI 解读（可选）**：`POST /analyze` 把浏览器算好的统计数字转发给 DeepSeek 生成解读。Key 只存服务端、按需触发、**未配置时自动降级**为本地规则文案
 - 🐛 **修了 `play_music` 直接崩的问题**：`{"error": "No songs found"}` 少了括号，整个工具会抛异常
 - 🎯 **修了 `get_artist_hot_songs` 的 `UnboundLocalError`**：兜底分支里引用了未赋值的变量
 - 📊 **修了 `get_play_history` 播放次数**：真实字段是 `playCount`，之前误读 `score` 永远显示 0
@@ -261,6 +262,10 @@ NETEASE_CSRF=你的csrf值
 | `MCP_ALLOW_ORIGINS` | 仅 localhost | 允许跨域调用 `/mcp` 的浏览器来源，逗号分隔；`*` 表示全部 |
 | `MCP_TRANSPORT` | `http` | 设为 `stdio` 等同 `--transport stdio` |
 | `NETEASE_HTTP_TIMEOUT` | `15` | 请求网易云的超时（秒） |
+| `DEEPSEEK_API_KEY` | 空（禁用） | 侧写页「AI 解读」使用的模型 Key。**留空则自动降级为本地规则文案**，功能不受影响 |
+| `DEEPSEEK_MODEL` | `deepseek-chat` | 模型名，可换 `deepseek-reasoner` |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | 接口地址，兼容 OpenAI 协议的服务可替换 |
+| `DEEPSEEK_TIMEOUT` / `DEEPSEEK_MAX_TOKENS` | `45` / `800` | 调用超时（秒）与最大输出 token |
 | `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `QUIET` |
 
 ### 4. 启动

@@ -360,6 +360,22 @@ body.hasbar{padding-bottom:70px}
 .pf-range button .rs{display:block;font-size:10.5px;opacity:.75;font-weight:400;margin-top:2px}
 
 /* 主卡：一句判词 */
+/* AI 解读面板 */
+.pf-ai{background:#fff;border:1px solid var(--line);border-radius:5px;padding:16px 18px;margin-bottom:16px}
+.ai-cta{display:flex;align-items:center;gap:14px;justify-content:space-between}
+.ai-cta-t{font-size:14px;font-weight:700;color:var(--fg)}
+.ai-cta-s{font-size:11.5px;color:var(--fg3);margin-top:3px}
+.ai-loading{font-size:13px;color:var(--fg2);padding:14px 0 4px}
+.ai-head{font-size:13px;font-weight:700;color:var(--fg);margin:14px 0 8px;
+  display:flex;align-items:baseline;gap:9px;border-left:3px solid var(--red);padding-left:9px}
+.ai-meta{font-size:11px;font-weight:400;color:var(--fg3)}
+.ai-body{font-size:13.5px;line-height:2;color:#333;background:#FBFCFE;
+  border:1px solid #E6EEF9;border-radius:4px;padding:13px 15px}
+.ai-actions{display:flex;gap:8px;margin-top:11px}
+.ai-off{font-size:13px;color:var(--fg2);padding:12px 0 2px}
+.ai-err{font-size:13px;color:#A00A0A;padding:12px 0 2px}
+.ai-off-hint{font-size:11.5px;color:var(--fg3);margin-top:5px;line-height:1.6}
+.pf-notes-h{font-size:12px;color:var(--fg3);letter-spacing:1px;margin:2px 0 8px}
 .pf-hero{
   background:linear-gradient(135deg,#C20C0C,#8E0808);color:#fff;border-radius:6px;
   padding:30px 30px 26px;margin-bottom:18px;position:relative;overflow:hidden;
@@ -1305,6 +1321,80 @@ const RANGES = [
 
 let pfRange = localStorage.getItem('netease_pf_range') || 'all';
 
+/** POST /analyze 的地址：由 MCP 端点推导出同源服务 */
+function aiUrl() {
+  const m = String(ENDPOINT).match(/^(https?:\/\/[^/]+)/);
+  return (m ? m[1] : location.origin) + '/analyze';
+}
+
+/** 只发送统计结果，不发送任何账号凭据或原始 Cookie */
+function statsPayload(a) {
+  const label = RANGES.filter(function (r) { return r.id === a.mode; })[0].label;
+  return {
+    range: label,
+    totals: { songs: a.base.length, plays: a.total, avg_plays_per_song: +a.avg.toFixed(2) },
+    top_artists: a.artists.slice(0, 8).map(function (x) {
+      return { name: x.name, plays: Math.round(x.plays), songs: x.songs };
+    }),
+    top_songs: a.A.slice(0, 10).map(function (x) {
+      return { name: x.name, artist: x.artist, plays: x.plays };
+    }),
+    week_top_songs: a.W.slice(0, 8).map(function (x) {
+      return { name: x.name, artist: x.artist, plays: x.plays };
+    }),
+    hourly_distribution: a.hours,
+    peak_hour: a.peakHour,
+    night_ratio: +a.nightRate.toFixed(3),
+    period: a.period,
+    language: { latin_ratio: +a.latinRate.toFixed(3), cjk_ratio: +a.cjkRate.toFixed(3) },
+    new_entries_count: a.fresh.length,
+  };
+}
+
+/** 点「用 AI 解读」后才把统计数字发给模型服务 */
+window.runAi = async function () {
+  const a = window._lastProfile;
+  const box = document.getElementById('aiBox');
+  if (!a || !box) return;
+  box.innerHTML = '<div class="ai-loading"><span class="spin"></span>' +
+    '正在请求模型解读…（数字已发送，凭据未发送）</div>';
+  try {
+    const res = await fetch(aiUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stats: statsPayload(a) }),
+    });
+    const d = await res.json();
+    if (d.ok) {
+      window._aiText = d.analysis;
+      box.innerHTML = '<div class="ai-head">AI 解读' +
+        '<span class="ai-meta">' + esc(d.model || '') +
+        (d.elapsed_ms ? ' · ' + (d.elapsed_ms / 1000).toFixed(1) + 's' : '') +
+        (d.tokens && d.tokens.completion ? ' · ' + d.tokens.completion + ' tokens' : '') +
+        '</span></div>' +
+        '<div class="ai-body">' + esc(d.analysis).replace(/\n/g, '<br>') + '</div>' +
+        '<div class="ai-actions"><button class="btn" onclick="runAi()">重新解读</button>' +
+        '<button class="btn" onclick="copyAi()">复制</button></div>';
+    } else if (d.disabled) {
+      box.innerHTML = '<div class="ai-off">AI 解读未启用' +
+        '<div class="ai-off-hint">' + esc(d.hint || '') + '</div></div>';
+    } else {
+      box.innerHTML = '<div class="ai-err">模型调用失败：' + esc(d.error || '未知错误') +
+        (d.detail ? '<div class="ai-off-hint">' + esc(String(d.detail).slice(0, 240)) + '</div>' : '') +
+        '<div class="ai-off-hint">下方本地规则洞察仍然可用。</div></div>';
+    }
+  } catch (e) {
+    box.innerHTML = '<div class="ai-err">连不上本机服务：' + esc(e.message) +
+      '<div class="ai-off-hint">下方本地规则洞察仍然可用。</div></div>';
+  }
+};
+
+window.copyAi = function () {
+  if (!window._aiText) return;
+  navigator.clipboard.writeText(window._aiText).then(function () { toast('已复制 AI 解读'); },
+    function () { toast('复制失败'); });
+};
+
 views.profile = async function () {
   loading('正在采集听歌数据…');
   try {
@@ -1399,8 +1489,16 @@ function renderProfile() {
     '</div>';
   html += '</div>';
 
-  // 趣味洞察
+  // AI 解读（可选，点了才发送统计数字）
+  html += '<div class="pf-ai"><div class="ai-cta">' +
+    '<div><div class="ai-cta-t">让模型写一段解读</div>' +
+    '<div class="ai-cta-s">只发送上面这些统计数字，不发送 Cookie 或账号信息</div></div>' +
+    '<button class="btn primary" onclick="runAi()">用 AI 解读</button>' +
+    '</div><div id="aiBox"></div></div>';
+
+  // 本地规则洞察（始终保留，作为兜底与对照）
   const ns = notes(a);
+  html += '<div class="pf-notes-h">本地规则洞察</div>';
   html += '<div class="pf-notes">' + ns.map(function (n) {
     return '<div class="pf-note' + (n.quote ? ' quote' : '') + '">' +
       (n.quote ? '' : '<span class="em">' + n.em + '</span>') +
@@ -1410,7 +1508,10 @@ function renderProfile() {
 
   html += '<div class="pf-foot">' + esc(caveat) +
     '<br>说明：网易云接口不提供任意时间段的历史播放记录，所以「1 年 / 1 月」无法真实查询；' +
-    '这里给出的三个窗口是接口实际能拿到的数据。分析全部在本地浏览器内完成，不上传任何数据。' +
+    '这里给出的三个窗口是接口实际能拿到的数据。' +
+    '<br><b>数据流向</b>：统计与本地规则洞察都在浏览器内完成，默认不联网；' +
+    '只有点击「用 AI 解读」时，上面那份统计数字才会经由本机服务转发给已配置的模型，' +
+    'Cookie 与账号信息始终不会离开本机。' +
     '</div>';
 
   html += '<div class="pf-tools">' +

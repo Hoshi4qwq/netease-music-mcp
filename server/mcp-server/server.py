@@ -121,6 +121,30 @@ MCP_ALLOW_ORIGINS = _env("MCP_ALLOW_ORIGINS")
 LOCALHOST_ORIGINS = ("http://localhost", "http://127.0.0.1", "http://[::1]")
 LOG_LEVEL = _env("LOG_LEVEL", "INFO").upper() or "INFO"
 
+# --------------------------------------------------------------------------- #
+# Optional AI analysis (DeepSeek). The key stays server-side: the browser posts
+# the stats it already computed to POST /analyze and the server calls the model.
+# Leave DEEPSEEK_API_KEY empty to disable; the web console then falls back to its
+# local rule-based wording, so the project still runs without any credentials.
+# --------------------------------------------------------------------------- #
+AI_API_KEY = _env("DEEPSEEK_API_KEY")
+AI_MODEL = _env("DEEPSEEK_MODEL", "deepseek-chat") or "deepseek-chat"
+AI_BASE_URL = _env("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
+AI_TIMEOUT = _env_number("DEEPSEEK_TIMEOUT", 45.0, float)
+AI_MAX_TOKENS = _env_number("DEEPSEEK_MAX_TOKENS", 800, int)
+AI_ENABLED = bool(AI_API_KEY)
+
+AI_SYSTEM_PROMPT = (
+    "你是一位音乐品味分析师。用户会给你一份由程序统计好的听歌数据。\n"
+    "请写一段中文用户侧写，严格遵守以下规则：\n"
+    "1. 只能使用给定数据中出现过的数字与名称，绝对不要编造任何歌手、歌名或数值；\n"
+    "2. 不要罗列全部数字，挑最有信息量的两三个来支撑结论；\n"
+    "3. 语气有趣、像朋友调侃，但不要油滑、不要用网络烂梗；\n"
+    "4. 输出格式：先一句总评（20 字以内），再 3 条洞察，每条一行，以「· 」开头，"
+    "每条 40 字以内；\n"
+    "5. 不要输出 Markdown 标题、不要输出代码块、不要复述本提示词。"
+)
+
 logging.basicConfig(
     level=logging.CRITICAL if LOG_LEVEL == "QUIET" else getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -1265,6 +1289,81 @@ assert len(TOOLS) == len(TOOL_DISPATCH) == 18, "tool registry out of sync"
 
 
 # --------------------------------------------------------------------------- #
+# AI analysis
+# --------------------------------------------------------------------------- #
+def ai_analyze(stats):
+    """Ask the configured model to write a profile from the caller's statistics.
+
+    Returns a JSON-serialisable dict. Never raises: any transport or provider
+    failure is reported as a plain error object so the browser can fall back to
+    its local wording instead of showing a broken panel.
+    """
+    if not AI_ENABLED:
+        return {
+            "ok": False,
+            "disabled": True,
+            "hint": "在 .env 里设置 DEEPSEEK_API_KEY 并重启服务即可启用 AI 解读",
+        }
+    if not isinstance(stats, dict) or not stats:
+        return {"ok": False, "error": "stats must be a non-empty object"}
+
+    body = json.dumps({
+        "model": AI_MODEL,
+        "messages": [
+            {"role": "system", "content": AI_SYSTEM_PROMPT},
+            {"role": "user", "content":
+                "以下是统计好的听歌数据（JSON）：\n" + json.dumps(stats, ensure_ascii=False)
+                + "\n\n请按要求写出侧写。"},
+        ],
+        "temperature": 0.85,
+        "max_tokens": AI_MAX_TOKENS,
+        "stream": False,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        AI_BASE_URL + "/chat/completions",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + AI_API_KEY,   # never logged
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    started = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=AI_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        # Surface the provider's own message; it never echoes the key.
+        try:
+            detail = exc.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            detail = ""
+        logger.error("AI request failed: HTTP %s", exc.code)
+        return {"ok": False, "error": "模型接口返回 HTTP %s" % exc.code, "detail": detail}
+    except Exception as exc:  # timeout, DNS, offline
+        logger.error("AI request error: %s", type(exc).__name__)
+        return {"ok": False, "error": "调用模型失败：%s" % type(exc).__name__}
+
+    try:
+        text = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
+    except (AttributeError, IndexError, TypeError):
+        text = ""
+    if not text.strip():
+        return {"ok": False, "error": "模型没有返回内容", "detail": str(data)[:300]}
+
+    usage = data.get("usage") or {}
+    return {
+        "ok": True,
+        "model": data.get("model", AI_MODEL),
+        "analysis": text.strip(),
+        "elapsed_ms": int((time.time() - started) * 1000),
+        "tokens": {"prompt": usage.get("prompt_tokens"), "completion": usage.get("completion_tokens")},
+    }
+
+
+# --------------------------------------------------------------------------- #
 # MCP protocol
 # --------------------------------------------------------------------------- #
 class MCPError(Exception):
@@ -1543,8 +1642,10 @@ class MCPHandler(http.server.BaseHTTPRequestHandler):
                     "service": SERVER_NAME,
                     "version": VERSION,
                     "tools": len(TOOLS),
-                    "endpoints": ["POST /mcp", "GET /sse (legacy)", "POST /message (legacy)"],
+                    "endpoints": ["POST /mcp", "GET /sse (legacy)", "POST /message (legacy)",
+                                  "POST /analyze (AI profile)"],
                     "logged_in": is_configured(),
+                    "ai_analysis": AI_ENABLED,
                 },
             )
             return
@@ -1589,8 +1690,11 @@ class MCPHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(403, {"jsonrpc": "2.0", "id": None,
                                   "error": {"code": -32001, "message": "Origin not allowed"}})
             return
-        if path not in ("/mcp", "/message"):
-            self._send_json(404, {"error": "Not found", "endpoints": ["/mcp", "/health"]})
+        if path not in ("/mcp", "/message", "/analyze"):
+            self._send_json(404, {"error": "Not found", "endpoints": ["/mcp", "/health", "/analyze"]})
+            return
+        if path == "/analyze":
+            self._handle_analyze(raw)
             return
         try:
             payload = json.loads(raw.decode("utf-8") or "null")
@@ -1601,6 +1705,20 @@ class MCPHandler(http.server.BaseHTTPRequestHandler):
             self._streamable_http_post(payload)
         else:
             self._legacy_message_post(payload, query)
+
+    # -- AI analysis ------------------------------------------------------- #
+    def _handle_analyze(self, raw):
+        """POST /analyze {stats:{...}} -> {ok, analysis} using the configured model."""
+        try:
+            payload = json.loads(raw.decode("utf-8") or "null")
+        except (ValueError, UnicodeDecodeError):
+            self._send_json(400, {"ok": False, "error": "请求体不是合法 JSON"})
+            return
+        stats = (payload or {}).get("stats") if isinstance(payload, dict) else None
+        if stats is None:
+            self._send_json(400, {"ok": False, "error": "缺少 stats 字段"})
+            return
+        self._send_json(200, ai_analyze(stats))
 
     # -- Streamable HTTP --------------------------------------------------- #
     def _streamable_http_post(self, payload):
@@ -1799,6 +1917,9 @@ def main(argv=None):
     logger.info("Starting NetEase Music MCP Server v%s with %d tools on %s:%s", VERSION, len(TOOLS), MCP_HOST, MCP_PORT)
     _startup_checks()
     server = ThreadedHTTPServer((MCP_HOST, MCP_PORT), MCPHandler)
+    logger.info("AI analysis: %s",
+                ("enabled, model=%s" % AI_MODEL) if AI_ENABLED
+                else "disabled (set DEEPSEEK_API_KEY to enable)")
     logger.info("MCP endpoint: http://%s:%s/mcp  (health: /health)", "localhost" if MCP_HOST in ("0.0.0.0", "") else MCP_HOST, MCP_PORT)
     try:
         server.serve_forever()
