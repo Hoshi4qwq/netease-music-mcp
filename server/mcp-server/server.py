@@ -527,11 +527,14 @@ def _fmt_time(value):
 
 def _artists(song):
     parts = song.get("ar") or song.get("artists") or []
-    return ", ".join(a.get("name", "?") for a in parts) or "?"
+    # A track can carry an artist entry whose "name" is present but null, so
+    # .get("name", "?") returns None and str.join() then raises TypeError.
+    return ", ".join((a.get("name") or "?") for a in parts) or "?"
 
 
 def _album(song):
-    return (song.get("al") or song.get("album") or {}).get("name", "?")
+    al = song.get("al") or song.get("album") or {}
+    return al.get("name") or "?"
 
 
 def _duration(ms):
@@ -1100,7 +1103,11 @@ def get_artist_hot_songs(params):
             if legacy.get("code") == 200 and legacy.get("hotSongs"):
                 result, songs = legacy, legacy["hotSongs"]
             else:
-                return {"error": "Failed to get artist songs", "detail": _with_hint(result, fallback, legacy)}
+                # _with_hint takes a single result; keep each attempt visible instead.
+                return {"error": "Failed to get artist songs",
+                        "detail": {"weapi": _with_hint(result),
+                                   "api": _with_hint(fallback),
+                                   "legacy": _with_hint(legacy)}}
     songs = songs[:20]
     name = (songs[0].get("ar") or songs[0].get("artists") or [{}])[0].get("name", "?")
     return {"artist": name, "artist_id": artist_id_int, "hot_songs": [_line(i, s) for i, s in enumerate(songs, 1)]}
